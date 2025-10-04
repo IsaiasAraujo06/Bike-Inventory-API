@@ -1,32 +1,56 @@
 package main
 
 import (
-	"database/sql"
-	"io/ioutil"
 	"log"
+	"net/http"
 
-	_ "modernc.org/sqlite"
+	"github.com/IsaiasAraujo06/bike-inventory-api/internal/database"
+	"github.com/IsaiasAraujo06/bike-inventory-api/internal/handlers"
 )
 
 func main() {
-	db, err := sql.Open("sqlite", "data.go")
+	// Inicializa database
+	db, err := database.New("data.db")
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("❌ Failed to initialize database: %v", err)
 	}
-	defer db.Stats()
-	log.Println("Database connected")
+	defer db.Close()
+	log.Println("✅ Database connected")
 
-	// Execução do SQL de migração
-	sqlBytes, err := ioutil.ReadFile("migrations/001_create_products.sql")
-	if err != nil { // Tratamento de erro na leitura do arquivo
-		log.Fatal(err)
+	// Executa migrations
+	if err := db.RunMigrations(); err != nil {
+		log.Fatalf("❌ Failed to run migrations: %v", err)
 	}
+	log.Println("✅ Migrations executed successfully")
 
-	_, err = db.Exec(string(sqlBytes))
-	if err != nil { // Tratamento de erro na execução do SQL
-		log.Fatal(err)
+	// Inicializa repository e handler
+	productRepo := database.NewProductRepository(db.DB)
+	productHandler := handlers.NewProductHandler(productRepo)
+
+	// Health check
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status": "healthy", "database": "connected"}`))
+	})
+
+	// Rotas de produtos
+	http.HandleFunc("/products", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			productHandler.Create(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	http.HandleFunc("/products/", productHandler.GetByID)
+
+	// Inicia servidor
+	port := "8080"
+	log.Printf("🚀 Server starting on port %s", port)
+	log.Printf("📍 http://localhost:%s", port)
+
+	if err := http.ListenAndServe(":"+port, nil); err != nil {
+		log.Fatalf("❌ Server failed to start: %v", err)
 	}
-
-	log.Println("Migration executed successfully")
-
 }
